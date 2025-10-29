@@ -2,15 +2,21 @@
 
 pub(crate) mod macros;
 mod query;
+mod selectors;
 
 use scraper::{Html, Selector};
 use serde::Deserialize;
+use rayon::prelude::*;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::time::Duration;
 
 use crate::{
     error::Result,
     interface::product::{AgeCategory, WorkType},
     utils::ToParseError,
     DlsiteClient,
+    cache::GenericCache,
 };
 
 pub use self::query::SearchProductQuery;
@@ -18,6 +24,8 @@ pub use self::query::SearchProductQuery;
 /// Client to search products on DLsite.
 pub struct SearchClient<'a> {
     pub(crate) c: &'a DlsiteClient,
+    /// Cache for search results to avoid re-parsing the same queries
+    result_cache: Arc<Mutex<GenericCache<Vec<SearchProductItem>>>>,
 }
 
 #[derive(Deserialize)]
@@ -31,7 +39,7 @@ struct SearchAjaxResult {
     page_info: SearchPageInfo,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct SearchProductItem {
     pub id: String,
     pub title: String,
@@ -69,6 +77,14 @@ fn parse_num_str(str: &str) -> Result<i32> {
 }
 
 impl<'a> SearchClient<'a> {
+    /// Create a new search client
+    pub(crate) fn new(c: &'a DlsiteClient) -> Self {
+        Self {
+            c,
+            result_cache: Arc::new(Mutex::new(GenericCache::new(100, Duration::from_secs(3600)))),
+        }
+    }
+
     /// Search products on DLsite.
     ///
     /// # Arguments
@@ -95,12 +111,38 @@ impl<'a> SearchClient<'a> {
     /// ```
     pub async fn search_product(&self, options: &SearchProductQuery) -> Result<SearchResult> {
         let query_path = options.to_path();
+
+        // Check if results are cached
+        {
+            let cache = self.result_cache.lock().unwrap();
+            if let Some(cached_products) = cache.get(&query_path) {
+                // Get count from API (it's small and fast)
+                let json = self.c.get(&query_path).await?;
+                let json = serde_json::from_str::<SearchAjaxResult>(&json)?;
+                let count = json.page_info.count;
+
+                return Ok(SearchResult {
+                    products: cached_products,
+                    count,
+                    query_path,
+                });
+            }
+        }
+
+        // Cache miss - fetch and parse
         let json = self.c.get(&query_path).await?;
         let json = serde_json::from_str::<SearchAjaxResult>(&json)?;
         let html = json.search_result;
         let count = json.page_info.count;
 
-        let products = parse_search_html(&html)?;
+        // Use parallel parsing for better performance
+        let products = parse_search_html_parallel(&html)?;
+
+        // Cache the results
+        {
+            let cache = self.result_cache.lock().unwrap();
+            cache.insert(query_path.clone(), products.clone());
+        }
 
         Ok(SearchResult {
             products,
@@ -108,6 +150,287 @@ impl<'a> SearchClient<'a> {
             query_path,
         })
     }
+
+    /// Search multiple queries concurrently for better performance
+    /// This method uses tokio::join_all to fetch multiple pages in parallel
+    ///
+    /// # Arguments
+    /// * `queries` - Vector of search queries to execute
+    ///
+    /// # Returns
+    /// * `Vec<SearchResult>` - Results for each query in the same order
+    pub async fn search_products_batch(&self, queries: &[SearchProductQuery]) -> Result<Vec<SearchResult>> {
+        let futures: Vec<_> = queries
+            .iter()
+            .map(|q| self.search_product(q))
+            .collect();
+
+        futures::future::try_join_all(futures).await
+    }
+
+    /// Stream search results for a query, parsing items as they are fetched
+    /// This method is optimized for memory efficiency and responsiveness
+    ///
+    /// # Arguments
+    /// * `options` - Search query options
+    /// * `callback` - Function to call for each parsed item
+    ///
+    /// # Returns
+    /// * `Result<i32>` - Total count of items
+    pub async fn search_product_stream<F>(&self, options: &SearchProductQuery, mut callback: F) -> Result<i32>
+    where
+        F: FnMut(SearchProductItem),
+    {
+        let query_path = options.to_path();
+        let json = self.c.get(&query_path).await?;
+        let json = serde_json::from_str::<SearchAjaxResult>(&json)?;
+        let html = json.search_result;
+        let count = json.page_info.count;
+
+        // Parse and stream items
+        let html = Html::parse_fragment(&html);
+        for item_element in html.select(&Selector::parse("#search_result_img_box > li").unwrap()) {
+            let item_html = item_element.html();
+            match parse_search_item_html(&item_html) {
+                Ok(item) => callback(item),
+                Err(e) => eprintln!("Warning: Failed to parse item: {:?}", e),
+            }
+        }
+
+        Ok(count)
+    }
+}
+
+/// Parse a single search result item from HTML element
+/// This function is designed to be used in parallel processing
+fn parse_search_item_html(item_html: &str) -> Result<SearchProductItem> {
+    let item_element = Html::parse_fragment(item_html);
+    let item_element = item_element
+        .root_element();
+
+    let product_id_e = item_element
+        .select(selectors::product_id_element())
+        .next()
+        .to_parse_error("Failed to find data element")?
+        .value();
+    let maker_e = item_element
+        .select(selectors::maker_name())
+        .next()
+        .to_parse_error("Failed to find maker element")?;
+    let author_e = item_element
+        .select(selectors::author())
+        .next();
+
+    let price_e = item_element
+        .select(selectors::work_price())
+        .next()
+        .to_parse_error("Failed to find price element")?;
+    let original_price_e = item_element
+        .select(selectors::original_price())
+        .next();
+    let (sale_price_e, original_price_e) = if let Some(e) = original_price_e {
+        (Some(price_e), e)
+    } else {
+        (None, price_e)
+    };
+    let id = product_id_e
+        .attr("data-product_id")
+        .to_parse_error("Failed to get product id")?
+        .to_string();
+
+    Ok(SearchProductItem {
+        id: id.clone(),
+        title: item_element
+            .select(selectors::work_title())
+            .next()
+            .to_parse_error("Failed to get title")?
+            .value()
+            .attr("title")
+            .unwrap()
+            .to_string(),
+        age_category: {
+            if let Some(e) = item_element
+                .select(selectors::age_category())
+                .next()
+            {
+                let title = e.value().attr("title");
+                if let Some(title) = title {
+                    match title {
+                        "全年齢" => AgeCategory::General,
+                        "R-15" => AgeCategory::R15,
+                        _ => {
+                            return Err(crate::DlsiteError::Parse(
+                                "Age category parse error: invalid title".to_string(),
+                            ))
+                        }
+                    }
+                } else {
+                    return Err(crate::DlsiteError::Parse(
+                        "Age category parse error".to_string(),
+                    ));
+                }
+            } else {
+                AgeCategory::Adult
+            }
+        },
+        circle_name: maker_e.text().next().unwrap_or("").to_string(),
+        circle_id: maker_e
+            .value()
+            .attr("href")
+            .to_parse_error("Failed to get maker link")?
+            .split('/')
+            .next_back()
+            .to_parse_error("Invalid url")?
+            .split('.')
+            .next()
+            .to_parse_error("Failed to find maker id")?
+            .to_string(),
+        creator: {
+            if let Some(creator_e) = author_e {
+                let name = creator_e
+                    .select(selectors::creator_link())
+                    .next()
+                    .to_parse_error("Failed to find creator")?
+                    .text()
+                    .next()
+                    .to_parse_error("Failed to find creator")?
+                    .to_string();
+                Some(name)
+            } else {
+                None
+            }
+        },
+        creator_omitted: {
+            if let Some(creator_e) = author_e {
+                let omitted = creator_e
+                    .value()
+                    .attr("class")
+                    .to_parse_error("Failed to find creator")?
+                    .split(" ")
+                    .any(|x| x == "omit");
+                Some(omitted)
+            } else {
+                None
+            }
+        },
+        dl_count: {
+            if let Some(e) = item_element
+                .select(selectors::dl_count())
+                .next()
+            {
+                Some(
+                    e.text()
+                        .next()
+                        .to_parse_error("Failed to get dl count")?
+                        .replace(',', "")
+                        .parse()
+                        .to_parse_error("Invalid dl count")?,
+                )
+            } else {
+                None
+            }
+        },
+        rate_count: {
+            if let Some(e) = item_element
+                .select(selectors::dl_count())
+                .next()
+            {
+                Some(parse_count_str(
+                    e.text().next().to_parse_error("Failed to get rate count")?,
+                )?)
+            } else {
+                None
+            }
+        },
+        review_count: {
+            if let Some(e) = item_element
+                .select(selectors::review_count())
+                .next()
+            {
+                Some(parse_count_str(
+                    e.text()
+                        .next()
+                        .to_parse_error("Failed to get review count")?,
+                )?)
+            } else {
+                None
+            }
+        },
+        price_original: parse_num_str(
+            original_price_e
+                .text()
+                .next()
+                .to_parse_error("Failed to find price")?,
+        )?,
+        price_sale: {
+            match sale_price_e {
+                Some(e) => Some(parse_num_str(
+                    e.text().next().to_parse_error("Failed to find price")?,
+                )?),
+                None => None,
+            }
+        },
+        work_type: item_element
+            .select(selectors::work_category())
+            .next()
+            .to_parse_error("Failed to find work category")?
+            .value()
+            .attr("class")
+            .to_parse_error("Failed to find worktype")?
+            .split(' ')
+            .find_map(|c| {
+                if let Some(c) = c.strip_prefix("type_") {
+                    if let Ok(wt) = c.parse::<WorkType>() {
+                        if let WorkType::Unknown(_) = wt {
+                            return None;
+                        } else {
+                            return Some(wt);
+                        }
+                    }
+                }
+                None
+            })
+            .unwrap_or(WorkType::Unknown("".to_string())),
+        thumbnail_url: {
+            let img_e = item_element
+                .select(selectors::thumbnail_image())
+                .next()
+                .to_parse_error("Failed to find thumbnail")?;
+
+            let src = img_e.value().attr("src");
+            let data_src = img_e.value().attr("data-src");
+            match (src, data_src) {
+                (Some(src), _) => format!("https:{}", src),
+                (_, Some(data_src)) => format!("https:{}", data_src),
+                (_, _) => {
+                    return Err(crate::DlsiteError::Parse(
+                        "Failed to find thumbnail".to_string(),
+                    ))
+                }
+            }
+        },
+        rating: {
+            if let Some(e) = item_element
+                .select(selectors::rating())
+                .next()
+            {
+                e.value()
+                    .attr("class")
+                    .expect("Failed to get rating")
+                    .split(' ')
+                    .find_map(|c| {
+                        if let Some(c) = c.strip_prefix("star_") {
+                            if let Ok(r) = c.parse::<f32>() {
+                                return Some(r / 10.0);
+                            }
+                        }
+                        None
+                    })
+            } else {
+                None
+            }
+        },
+    })
 }
 
 pub(crate) fn parse_search_html(html: &str) -> Result<Vec<SearchProductItem>> {
@@ -355,6 +678,24 @@ pub(crate) fn parse_search_html(html: &str) -> Result<Vec<SearchProductItem>> {
     }
 
     Ok(result)
+}
+
+/// Parse search HTML using parallel processing for better performance
+/// This function is optimized for large result sets (50+ items)
+pub(crate) fn parse_search_html_parallel(html: &str) -> Result<Vec<SearchProductItem>> {
+    let html = Html::parse_fragment(html);
+
+    // Collect all item elements as HTML strings
+    let items: Vec<String> = html
+        .select(&Selector::parse("#search_result_img_box > li").unwrap())
+        .map(|elem| elem.html())
+        .collect();
+
+    // Process items in parallel
+    items
+        .par_iter()
+        .map(|item_html| parse_search_item_html(item_html))
+        .collect()
 }
 
 #[cfg(test)]

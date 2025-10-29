@@ -3,13 +3,32 @@ use thiserror::Error;
 /// Errors that can occur while using the Dlsite API
 #[derive(Debug, Error)]
 pub enum DlsiteError {
+    /// HTTP request error
     #[error(transparent)]
     Reqwest(#[from] reqwest::Error),
+
+    /// JSON serialization/deserialization error
     #[error(transparent)]
     SerdeJson(#[from] serde_json::Error),
-    #[error("{0}")]
+
+    /// HTTP status code error
+    #[error("HTTP error: {0}")]
+    HttpStatus(u16),
+
+    /// Rate limit error - too many requests
+    #[error("Rate limited: {0}")]
+    RateLimit(String),
+
+    /// Request timeout error
+    #[error("Request timeout")]
+    Timeout,
+
+    /// HTML/JSON parsing error
+    #[error("Parse error: {0}")]
     Parse(String),
-    #[error("{0}")]
+
+    /// Server-side error
+    #[error("Server error: {0}")]
     Server(String),
 }
 

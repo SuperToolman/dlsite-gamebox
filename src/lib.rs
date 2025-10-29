@@ -6,10 +6,14 @@
     cfg_attr(doc, doc = ::document_features::document_features!())
 )]
 
+pub mod cache;
 pub mod client;
 pub mod error;
 pub mod interface;
+pub mod retry;
 mod utils;
 
-pub use client::DlsiteClient;
+pub use cache::{ResponseCache, GenericCache};
+pub use client::{DlsiteClient, DlsiteClientBuilder};
 pub use error::DlsiteError;
+pub use retry::RetryConfig;

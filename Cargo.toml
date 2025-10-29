@@ -26,6 +26,9 @@ url = "2.3.1"
 regex = "1.11.1"
 tracing = "0.1"
 document-features = { version = "0.2.11", optional = true }
+lru = "0.16.2"
+rayon = "1.11.0"
+futures = "0.3.31"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
