@@ -1,10 +1,13 @@
 [package]
-name = "dlsite"
+name = "dlsite-gamebox"
 version = "0.2.0"
 edition = "2021"
-description = "DLsite client"
+description = "High-performance DLsite client with caching, parallel parsing, and streaming support"
 license = "MIT"
-repository = "https://github.com/ozonezone/dlsite-rs"
+repository = "https://github.com/SuperToolman/dlsite-gamebox"
+authors = ["SuperToolman"]
+keywords = ["dlsite", "scraper", "api", "async", "performance"]
+categories = ["api-bindings"]
 
 [dependencies]
 tokio = { version = "1", features = ["macros"] }
