@@ -129,7 +129,7 @@ impl DlsiteClient {
         let url = format!("{}{}", self.base_url, path);
 
         // Check cache first
-        if let Some(cached) = self.cache.get(&url) {
+        if let Some(cached) = self.cache.get(&url).await {
             return Ok(cached);
         }
 
@@ -182,7 +182,7 @@ impl DlsiteClient {
                     let body = response.text().await?;
 
                     // Cache the response
-                    self.cache.insert(url, body.clone());
+                    self.cache.insert(url, body.clone()).await;
 
                     return Ok(body);
                 }
@@ -210,13 +210,13 @@ impl DlsiteClient {
     }
 
     /// Clear the response cache
-    pub fn clear_cache(&self) {
-        self.cache.clear();
+    pub async fn clear_cache(&self) {
+        self.cache.clear().await;
     }
 
     /// Get the number of entries in the cache
-    pub fn cache_size(&self) -> usize {
-        self.cache.len()
+    pub async fn cache_size(&self) -> usize {
+        self.cache.len().await
     }
 
     /// Set the retry configuration

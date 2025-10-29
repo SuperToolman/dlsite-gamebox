@@ -89,7 +89,7 @@ impl<'a> ProductClient<'a> {
     ///
     /// # Example
     /// ```
-    /// use dlsite::DlsiteClient;
+    /// use dlsite_gamebox::DlsiteClient;
     /// #[tokio::main]
     /// async fn main() {
     ///     let client = DlsiteClient::default();

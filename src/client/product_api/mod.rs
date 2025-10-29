@@ -30,7 +30,7 @@ impl<'a> ProductApiClient<'a> {
     ///
     /// # Example
     /// ```
-    /// use dlsite::DlsiteClient;
+    /// use dlsite_gamebox::DlsiteClient;
     ///
     /// #[tokio::main]
     /// async fn main() {

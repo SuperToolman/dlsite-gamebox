@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use lru::LruCache;
-use std::sync::Mutex;
+use tokio::sync::Mutex;
 use std::num::NonZeroUsize;
 
 /// Generic cache entry with expiration time
@@ -40,8 +40,8 @@ impl ResponseCache {
     }
 
     /// Get a value from the cache
-    pub fn get(&self, key: &str) -> Option<String> {
-        let mut cache = self.cache.lock().unwrap();
+    pub async fn get(&self, key: &str) -> Option<String> {
+        let mut cache = self.cache.lock().await;
         if let Some(entry) = cache.get_mut(key) {
             if !entry.is_expired() {
                 return Some(entry.data.clone());
@@ -54,8 +54,8 @@ impl ResponseCache {
     }
 
     /// Insert a value into the cache
-    pub fn insert(&self, key: String, value: String) {
-        let mut cache = self.cache.lock().unwrap();
+    pub async fn insert(&self, key: String, value: String) {
+        let mut cache = self.cache.lock().await;
         let entry = CacheEntry {
             data: value,
             expires_at: Instant::now() + self.ttl,
@@ -64,20 +64,20 @@ impl ResponseCache {
     }
 
     /// Clear all entries from the cache
-    pub fn clear(&self) {
-        let mut cache = self.cache.lock().unwrap();
+    pub async fn clear(&self) {
+        let mut cache = self.cache.lock().await;
         cache.clear();
     }
 
     /// Get the number of entries in the cache
-    pub fn len(&self) -> usize {
-        let cache = self.cache.lock().unwrap();
+    pub async fn len(&self) -> usize {
+        let cache = self.cache.lock().await;
         cache.len()
     }
 
     /// Check if the cache is empty
-    pub fn is_empty(&self) -> bool {
-        let cache = self.cache.lock().unwrap();
+    pub async fn is_empty(&self) -> bool {
+        let cache = self.cache.lock().await;
         cache.is_empty()
     }
 }
@@ -100,8 +100,8 @@ impl<T: Clone> GenericCache<T> {
     }
 
     /// Get a value from the cache
-    pub fn get(&self, key: &str) -> Option<T> {
-        let mut cache = self.cache.lock().unwrap();
+    pub async fn get(&self, key: &str) -> Option<T> {
+        let mut cache = self.cache.lock().await;
         if let Some(entry) = cache.get_mut(key) {
             if !entry.is_expired() {
                 return Some(entry.data.clone());
@@ -113,8 +113,8 @@ impl<T: Clone> GenericCache<T> {
     }
 
     /// Insert a value into the cache
-    pub fn insert(&self, key: String, value: T) {
-        let mut cache = self.cache.lock().unwrap();
+    pub async fn insert(&self, key: String, value: T) {
+        let mut cache = self.cache.lock().await;
         let entry = CacheEntry {
             data: value,
             expires_at: Instant::now() + self.ttl,
@@ -123,20 +123,20 @@ impl<T: Clone> GenericCache<T> {
     }
 
     /// Clear all entries from the cache
-    pub fn clear(&self) {
-        let mut cache = self.cache.lock().unwrap();
+    pub async fn clear(&self) {
+        let mut cache = self.cache.lock().await;
         cache.clear();
     }
 
     /// Get the number of entries in the cache
-    pub fn len(&self) -> usize {
-        let cache = self.cache.lock().unwrap();
+    pub async fn len(&self) -> usize {
+        let cache = self.cache.lock().await;
         cache.len()
     }
 
     /// Check if the cache is empty
-    pub fn is_empty(&self) -> bool {
-        let cache = self.cache.lock().unwrap();
+    pub async fn is_empty(&self) -> bool {
+        let cache = self.cache.lock().await;
         cache.is_empty()
     }
 }
@@ -145,46 +145,46 @@ impl<T: Clone> GenericCache<T> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_cache_insert_and_get() {
+    #[tokio::test]
+    async fn test_cache_insert_and_get() {
         let cache = ResponseCache::new(10, Duration::from_secs(60));
-        cache.insert("key1".to_string(), "value1".to_string());
-        assert_eq!(cache.get("key1"), Some("value1".to_string()));
+        cache.insert("key1".to_string(), "value1".to_string()).await;
+        assert_eq!(cache.get("key1").await, Some("value1".to_string()));
     }
 
-    #[test]
-    fn test_cache_expiration() {
+    #[tokio::test]
+    async fn test_cache_expiration() {
         let cache = ResponseCache::new(10, Duration::from_millis(100));
-        cache.insert("key1".to_string(), "value1".to_string());
-        assert_eq!(cache.get("key1"), Some("value1".to_string()));
-        
-        std::thread::sleep(Duration::from_millis(150));
-        assert_eq!(cache.get("key1"), None);
+        cache.insert("key1".to_string(), "value1".to_string()).await;
+        assert_eq!(cache.get("key1").await, Some("value1".to_string()));
+
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert_eq!(cache.get("key1").await, None);
     }
 
-    #[test]
-    fn test_cache_lru_eviction() {
+    #[tokio::test]
+    async fn test_cache_lru_eviction() {
         let cache = ResponseCache::new(2, Duration::from_secs(60));
-        cache.insert("key1".to_string(), "value1".to_string());
-        cache.insert("key2".to_string(), "value2".to_string());
-        cache.insert("key3".to_string(), "value3".to_string());
-        
+        cache.insert("key1".to_string(), "value1".to_string()).await;
+        cache.insert("key2".to_string(), "value2".to_string()).await;
+        cache.insert("key3".to_string(), "value3".to_string()).await;
+
         // key1 should be evicted
-        assert_eq!(cache.get("key1"), None);
-        assert_eq!(cache.get("key2"), Some("value2".to_string()));
-        assert_eq!(cache.get("key3"), Some("value3".to_string()));
+        assert_eq!(cache.get("key1").await, None);
+        assert_eq!(cache.get("key2").await, Some("value2".to_string()));
+        assert_eq!(cache.get("key3").await, Some("value3".to_string()));
     }
 
-    #[test]
-    fn test_cache_clear() {
+    #[tokio::test]
+    async fn test_cache_clear() {
         let cache = ResponseCache::new(10, Duration::from_secs(60));
-        cache.insert("key1".to_string(), "value1".to_string());
-        cache.insert("key2".to_string(), "value2".to_string());
-        assert_eq!(cache.len(), 2);
-        
-        cache.clear();
-        assert_eq!(cache.len(), 0);
-        assert!(cache.is_empty());
+        cache.insert("key1".to_string(), "value1".to_string()).await;
+        cache.insert("key2".to_string(), "value2".to_string()).await;
+        assert_eq!(cache.len().await, 2);
+
+        cache.clear().await;
+        assert_eq!(cache.len().await, 0);
+        assert!(cache.is_empty().await);
     }
 }
 

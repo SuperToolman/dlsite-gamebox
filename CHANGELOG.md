@@ -2,6 +2,50 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2025-10-29
+
+### Fixed
+
+#### Critical Bug Fix: Async Mutex Thread Safety
+- **Issue**: `std::sync::Mutex` guards could not safely cross `.await` points, causing compilation errors in async contexts
+- **Solution**: Replaced all `std::sync::Mutex` with `tokio::sync::Mutex` for proper async support
+- **Impact**: All cache operations are now fully async-safe and compatible with Tokio runtime
+
+#### API Changes (Breaking)
+- `ResponseCache::get()` is now `async fn`
+- `ResponseCache::insert()` is now `async fn`
+- `ResponseCache::clear()` is now `async fn`
+- `ResponseCache::len()` is now `async fn`
+- `ResponseCache::is_empty()` is now `async fn`
+- `GenericCache<T>::get()` is now `async fn`
+- `GenericCache<T>::insert()` is now `async fn`
+- `GenericCache<T>::clear()` is now `async fn`
+- `GenericCache<T>::len()` is now `async fn`
+- `GenericCache<T>::is_empty()` is now `async fn`
+- `DlsiteClient::clear_cache()` is now `async fn`
+- `DlsiteClient::cache_size()` is now `async fn`
+
+#### Migration Guide
+```rust
+// Before (0.2.0)
+let cached = cache.get(&key);
+cache.insert(key, value);
+client.clear_cache();
+
+// After (0.3.0)
+let cached = cache.get(&key).await;
+cache.insert(key, value).await;
+client.clear_cache().await;
+```
+
+### Added
+- Added `tokio::sync` feature to Tokio dependency for async-safe synchronization
+
+### Testing
+- ✅ All 27 unit tests passing
+- ✅ All 5 doc tests passing
+- ✅ 100% test pass rate (32/32)
+
 ## [0.2.0] - 2025-10-29
 
 ### Added

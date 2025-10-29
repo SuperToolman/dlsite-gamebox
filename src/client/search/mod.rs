@@ -8,7 +8,7 @@ use scraper::{Html, Selector};
 use serde::Deserialize;
 use rayon::prelude::*;
 use std::sync::Arc;
-use std::sync::Mutex;
+use tokio::sync::Mutex;
 use std::time::Duration;
 
 use crate::{
@@ -92,7 +92,7 @@ impl<'a> SearchClient<'a> {
     ///
     /// # Example
     /// ```
-    /// use dlsite::{DlsiteClient, client::search::SearchProductQuery, interface::query::*};
+    /// use dlsite_gamebox::{DlsiteClient, client::search::SearchProductQuery, interface::query::*};
     ///
     /// #[tokio::main]
     /// async fn main() {
@@ -114,8 +114,8 @@ impl<'a> SearchClient<'a> {
 
         // Check if results are cached
         {
-            let cache = self.result_cache.lock().unwrap();
-            if let Some(cached_products) = cache.get(&query_path) {
+            let cache = self.result_cache.lock().await;
+            if let Some(cached_products) = cache.get(&query_path).await {
                 // Get count from API (it's small and fast)
                 let json = self.c.get(&query_path).await?;
                 let json = serde_json::from_str::<SearchAjaxResult>(&json)?;
@@ -140,8 +140,8 @@ impl<'a> SearchClient<'a> {
 
         // Cache the results
         {
-            let cache = self.result_cache.lock().unwrap();
-            cache.insert(query_path.clone(), products.clone());
+            let cache = self.result_cache.lock().await;
+            cache.insert(query_path.clone(), products.clone()).await;
         }
 
         Ok(SearchResult {

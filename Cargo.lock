@@ -281,8 +281,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "dlsite"
-version = "0.2.0"
+name = "dlsite-gamebox"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
